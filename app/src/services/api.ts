@@ -11,24 +11,59 @@ export interface OpcionesApi {
   params?: Record<string, string | number | undefined>;
 }
 
-/**
- * TODO [M1] Cliente HTTP único de la aplicación (8 pts).
- *
- * api<T>(ruta, { method, body, params }) debe:
- *  1. Construir la URL como BASE_URL + ruta y agregar como query string solo los params
- *     que tengan valor (ni undefined ni '').           ej. api('/equipos', { params: { page: 2, q: '' } })
- *  2. Enviar siempre "Accept: application/json".
- *  3. Si hay token (obtenerToken()), enviar "Authorization: Bearer <token>". Nunca en la URL.
- *  4. Si hay body, enviarlo como JSON ("Content-Type: application/json" + JSON.stringify).
- *  5. Cancelar la petición si tarda más de TIEMPO_MAXIMO_MS (AbortController).
- *     Si fetch falla sin respuesta (sin red, tiempo agotado, CORS), lanzar
- *     new ErrorApi(0, { mensaje: 'No fue posible conectar con la API.' }).
- *  6. Si la respuesta es 204, devolver null.
- *  7. Si response.ok es false, lanzar new ErrorApi(status, cuerpoJson).
- *     Si el estado es 401 (y la ruta no es /login): await olvidarSesion() y router.replace('/login').
- *  8. En cualquier otro caso, devolver el cuerpo JSON.
- */
 export async function api<T = unknown>(ruta: string, opciones: OpcionesApi = {}): Promise<T> {
-  void [ErrorApi, obtenerToken, olvidarSesion, router, BASE_URL, TIEMPO_MAXIMO_MS, ruta, opciones];
-  throw new Error('TODO [M1] api() sin implementar');
+  let url = `${BASE_URL}${ruta}`;
+  if (opciones.params) {
+    const qs = new URLSearchParams();
+    for (const [clave, valor] of Object.entries(opciones.params)) {
+      if (valor !== undefined && valor !== '') {
+        qs.append(clave, String(valor));
+      }
+    }
+    const cadenaQs = qs.toString();
+    if (cadenaQs) {
+      url += `?${cadenaQs}`;
+    }
+  }
+
+  const token = obtenerToken();
+  const tieneBody = opciones.body !== undefined;
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    ...(tieneBody ? { 'Content-Type': 'application/json' } : {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+
+  const controlador = new AbortController();
+  const temporizador = setTimeout(() => controlador.abort(), TIEMPO_MAXIMO_MS);
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: opciones.method ?? 'GET',
+      headers,
+      body: tieneBody ? JSON.stringify(opciones.body) : undefined,
+      signal: controlador.signal,
+    });
+  } catch {
+    throw new ErrorApi(0, { mensaje: 'No fue posible conectar con la API.' });
+  } finally {
+    clearTimeout(temporizador);
+  }
+
+  if (response.status === 204) {
+    return null as T;
+  }
+
+  const cuerpoJson = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    if (response.status === 401 && ruta !== '/login') {
+      await olvidarSesion();
+      await router.replace('/login');
+    }
+    throw new ErrorApi(response.status, cuerpoJson);
+  }
+
+  return cuerpoJson as T;
 }

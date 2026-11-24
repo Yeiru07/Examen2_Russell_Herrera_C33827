@@ -79,7 +79,6 @@ import { ErrorApi } from '@/services/errores';
 import { mostrarToast } from '@/services/avisos';
 import { useConexion, vibrar } from '@/composables/useConexion';
 
-// id llega por props: true en la ruta equipos/:id/editar; en equipos/nuevo es undefined
 const props = defineProps<{ id?: string }>();
 const id = props.id;
 
@@ -96,30 +95,78 @@ const listaCategorias = ref<Categoria[]>([]);
 const estadoActual = ref<Estado>('disponible');
 const errores = ref<Record<string, string>>({});
 
-/**
- * TODO [M5] Al entrar a la página:
- *  - Cargar las categorías para el ion-select (categorias()).
- *  - Nuevo: dejar el formulario vacío con vacio().
- *  - Edición: obtener(id) y llenar datos. Guarde el estado actual en estadoActual.
- *    costo_interno queda en null: la API no lo devuelve (EquipoResource lo oculta).
- *  - 404 → toast y volver a /tabs/equipos.
- */
 onIonViewWillEnter(async () => {
   errores.value = {};
-  void [categorias, obtener, listaCategorias, estadoActual, ionRouter];
+  Object.assign(datos, vacio());
+  estadoActual.value = 'disponible';
+
+  try {
+    listaCategorias.value = await categorias();
+    if (id) {
+      const equipo = await obtener(id);
+      estadoActual.value = equipo.estado;
+      Object.assign(datos, {
+        codigo: equipo.codigo,
+        nombre: equipo.nombre,
+        categoria_id: equipo.categoria.id,
+        estado: equipo.estado === 'prestado' ? undefined : equipo.estado,
+        fecha_adquisicion: equipo.fecha_adquisicion,
+        costo_interno: null,
+      });
+    }
+  } catch (e) {
+    if (e instanceof ErrorApi && e.status === 404) {
+      await mostrarToast('El equipo ya no existe.', 'warning');
+      ionRouter.navigate('/tabs/equipos', 'back', 'replace');
+    } else if (!(e instanceof ErrorApi && e.status === 401)) {
+      await mostrarToast('No fue posible cargar el equipo.', 'danger');
+    }
+  }
 });
 
-/**
- * TODO [M5] guardar()
- *  1. Mostrar loadingController ("Guardando…") y cerrarlo SIEMPRE, salga bien o mal.
- *  2. Enviar el cuerpo con código en mayúscula y sin espacios sobrantes, y costo_interno como número.
- *     Si el equipo está prestado, no envíe el campo estado.
- *  3. Nuevo → crear(); edición → actualizar(id).
- *  4. Éxito: vibrar() [M7], toast y volver a la lista con useIonRouter (back si se puede).
- *  5. 422 → mostrar el primer mensaje de cada campo debajo de su campo (error.erroresPorCampo).
- *     404 → toast "El equipo ya no existe."   ·   otros → toast genérico.
- */
 async function guardar() {
-  void [loadingController, actualizar, crear, ErrorApi, mostrarToast, vibrar];
+  errores.value = {};
+  const cargando = await loadingController.create({ message: 'Guardando…' });
+  await cargando.present();
+
+  try {
+    const cuerpo: DatosEquipo = {
+      codigo: datos.codigo.trim().toUpperCase(),
+      nombre: datos.nombre.trim(),
+      categoria_id: datos.categoria_id !== null ? Number(datos.categoria_id) : null,
+      ...(estadoActual.value !== 'prestado' ? { estado: datos.estado ?? 'disponible' } : {}),
+      fecha_adquisicion: datos.fecha_adquisicion,
+      costo_interno:
+        datos.costo_interno !== null && String(datos.costo_interno).trim() !== ''
+          ? Number(datos.costo_interno)
+          : null,
+    };
+
+    if (id) {
+      await actualizar(id, cuerpo);
+    } else {
+      await crear(cuerpo);
+    }
+
+    await vibrar();
+    await mostrarToast(id ? 'Equipo actualizado.' : 'Equipo creado.', 'success');
+
+    if (ionRouter.canGoBack()) {
+      ionRouter.back();
+    } else {
+      ionRouter.navigate('/tabs/equipos', 'back', 'replace');
+    }
+  } catch (e) {
+    if (e instanceof ErrorApi && e.status === 422) {
+      errores.value = e.erroresPorCampo;
+    } else if (e instanceof ErrorApi && e.status === 404) {
+      await mostrarToast('El equipo ya no existe.', 'warning');
+      ionRouter.navigate('/tabs/equipos', 'back', 'replace');
+    } else if (!(e instanceof ErrorApi && e.status === 401)) {
+      await mostrarToast('No fue posible guardar el equipo.', 'danger');
+    }
+  } finally {
+    await cargando.dismiss();
+  }
 }
 </script>
